@@ -14,8 +14,19 @@ export type Audit = {
   status: "SETTLED" | "HELD" | "RETURNED";
   kind: string;
   destination: string;
+  actor?: string;
 };
-export type MonitorState = { held: number; credited: number; events: Audit[] };
+export type MonitorState = {
+  held: number;
+  credited: number;
+  incidents: {
+    id: string;
+    amount: number;
+    actor: string | null;
+    mine: boolean | number;
+  }[];
+  events: Audit[];
+};
 export class ApiError extends Error {
   constructor(
     readonly status: number,

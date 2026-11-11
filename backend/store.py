@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS payments(
  amount INTEGER NOT NULL CHECK(amount>0), created INTEGER NOT NULL,
  status TEXT NOT NULL CHECK(status IN ('SETTLED','HELD','RETURNED')), expires INTEGER,
  UNIQUE(account,request_key));
+CREATE TABLE IF NOT EXISTS assignments(
+ payment TEXT PRIMARY KEY REFERENCES payments(id), operator_hash TEXT NOT NULL,
+ actor TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS due ON payments(status,expires);
 CREATE TABLE IF NOT EXISTS beneficiaries(
  account TEXT NOT NULL REFERENCES accounts(id), recipient_hash TEXT NOT NULL,

@@ -92,3 +92,46 @@ class Transfers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IncidentResolution(unittest.TestCase):
+    def test_owner_audit_and_exactly_once_refund(self) -> None:
+        with TemporaryDirectory() as folder:
+            now = [1700000000]
+            bank = Bank(folder + "/ledger", lambda: now[0])
+            device = bank.start()
+            ref = bank.transfer(device, str(uuid4()), "77015550142", 500000, "9999")[
+                "id"
+            ]
+            with self.assertRaises(Rejected):
+                bank.handle_incident(ref, "cancel", "alice", "Amina")
+            bank.handle_incident(ref, "claim", "alice", "Amina")
+            with self.assertRaises(Rejected):
+                bank.handle_incident(ref, "cancel", "bob", "Amina")
+            now[0] += 30
+            with ThreadPoolExecutor(2) as pool:
+                list(
+                    pool.map(
+                        lambda _: bank.handle_incident(
+                            ref, "cancel", "alice", "Edited name"
+                        ),
+                        range(2),
+                    )
+                )
+            now[0] += 3600
+            self.assertEqual(bank.snapshot(device)["balance"], 1250000)
+            snapshot = bank.monitor()
+            self.assertEqual(
+                (snapshot["held"], snapshot["credited"], snapshot["incidents"]),
+                (0, 0, []),
+            )
+            actions = [
+                (e["kind"], e["actor"], e["created"]) for e in snapshot["events"][:2]
+            ]
+            self.assertEqual(
+                actions,
+                [
+                    ("CANCELLED_REFUNDED", "Amina · alice", 1700000030),
+                    ("INCIDENT_CLAIMED", "Amina · alice", 1700000000),
+                ],
+            )

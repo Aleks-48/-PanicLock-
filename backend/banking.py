@@ -160,7 +160,50 @@ class Bank:
                 )
         raise Rejected(401, "Incorrect PIN. Try again.")
 
-    def monitor(self) -> dict:
+    def handle_incident(
+        self, ref: str, action: str, operator_hash: str, name: str
+    ) -> None:
+        with transaction(self.path, write=True) as db:
+            now = int(self.clock())
+            self.expire(db, now)
+            payment = db.execute("SELECT * FROM payments WHERE id=?", (ref,)).fetchone()
+            if not payment:
+                raise Rejected(404, "Unknown incident")
+            owner = db.execute(
+                "SELECT * FROM assignments WHERE payment=?", (ref,)
+            ).fetchone()
+            if owner and owner["operator_hash"] != operator_hash:
+                raise Rejected(409, "Another operator owns this incident")
+            if payment["status"] != "HELD":
+                if (
+                    action == "cancel"
+                    and owner
+                    and db.execute(
+                        "SELECT 1 FROM events WHERE payment=? AND kind='CANCELLED_REFUNDED'",
+                        (ref,),
+                    ).fetchone()
+                ):
+                    return
+                raise Rejected(409, "This transfer is no longer held")
+            if action == "claim":
+                if not owner:
+                    actor = f"{name} · {operator_hash[:6]}"
+                    db.execute(
+                        "INSERT INTO assignments VALUES(?,?,?)",
+                        (ref, operator_hash, actor),
+                    )
+                    event(db, ref, "INCIDENT_CLAIMED", "SOC", now)
+                return
+            if not owner:
+                raise Rejected(409, "Claim this incident first")
+            db.execute("UPDATE payments SET status='RETURNED' WHERE id=?", (ref,))
+            db.execute(
+                "UPDATE accounts SET balance=balance+? WHERE id=?",
+                (payment["amount"], payment["account"]),
+            )
+            event(db, ref, "CANCELLED_REFUNDED", "Sender account", now)
+
+    def monitor(self, operator_hash: str = "") -> dict:
         with transaction(self.path, write=True) as db:
             self.expire(db, int(self.clock()))
             totals = db.execute(
@@ -171,11 +214,22 @@ class Bank:
                 "SELECT coalesce(sum(balance),0) FROM beneficiaries"
             ).fetchone()[0]
             rows = db.execute(
-                """SELECT e.seq,e.created,e.kind,e.destination,p.id,p.amount,p.expires,p.status
-                                 FROM events e JOIN payments p ON p.id=e.payment ORDER BY e.seq DESC LIMIT 80"""
+                """SELECT e.seq,e.created,e.kind,e.destination,p.id,p.amount,p.expires,p.status,
+                           CASE WHEN e.kind IN ('INCIDENT_CLAIMED','CANCELLED_REFUNDED') THEN a.actor
+                                ELSE 'System' END actor
+                                 FROM events e JOIN payments p ON p.id=e.payment LEFT JOIN assignments a ON a.payment=p.id ORDER BY e.seq DESC LIMIT 80"""
             )
             return {
                 "held": totals["held"],
                 "credited": credited,
+                "incidents": [
+                    dict(r)
+                    for r in db.execute(
+                        """SELECT p.id,p.amount,a.actor,a.operator_hash=? AS mine
+                         FROM payments p LEFT JOIN assignments a ON a.payment=p.id
+                         WHERE p.status='HELD' ORDER BY p.rowid DESC""",
+                        (operator_hash,),
+                    )
+                ],
                 "events": [dict(r) for r in rows],
             }

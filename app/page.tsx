@@ -477,6 +477,20 @@ export default function Page() {
   }
   useEffect(() => {
     void load();
+    function refresh() {
+      void load();
+    }
+    function synced(e: StorageEvent) {
+      if (e.key === "paniclock-last-refund") refresh();
+    }
+    window.addEventListener("storage", synced);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("soc-refund", refresh);
+    return () => {
+      window.removeEventListener("storage", synced);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("soc-refund", refresh);
+    };
   }, []);
   async function submit(pinValue: string) {
     if (working.current) throw new Error("Please wait.");

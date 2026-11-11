@@ -12,7 +12,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
-from banking import Bank, Rejected
+from banking import Bank, Rejected, digest
+from typing import Literal
 
 root = Path(os.getenv("PANICLOCK_DATA", "data"))
 root.mkdir(parents=True, exist_ok=True)
@@ -108,13 +109,38 @@ def transfer(
     )
 
 
-@app.get("/api/soc")
-def soc(authorization: str = Header(default="")) -> dict:
+def require_soc(authorization: str) -> None:
     if not secrets.compare_digest(
         authorization.encode(), ("Bearer " + operator).encode()
     ):
         raise HTTPException(403, "Operator key required")
-    return bank.monitor()
+
+
+class IncidentAction(BaseModel):
+    action: Literal["claim", "cancel"]
+    name: str = Field(min_length=1, max_length=48, pattern=r"^[^\x00-\x1f\x7f]+$")
+
+
+@app.get("/api/soc")
+def soc(
+    authorization: str = Header(default=""), x_operator: str = Header(default="")
+) -> dict:
+    require_soc(authorization)
+    return bank.monitor(digest(x_operator))
+
+
+@app.post("/api/soc/incidents/{ref}")
+def handle_incident(
+    ref: str,
+    body: IncidentAction,
+    x_operator: UUID = Header(),
+    authorization: str = Header(default=""),
+) -> dict:
+    require_soc(authorization)
+    if not body.name.strip():
+        raise HTTPException(422, "Enter your operator name")
+    bank.handle_incident(ref, body.action, digest(str(x_operator)), body.name.strip())
+    return {"ok": True}
 
 
 @app.get("/api/health")
