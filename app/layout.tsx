@@ -4,7 +4,7 @@ export const metadata = {
   description:
     "An interactive mobile banking and duress protection demonstration.",
 };
-export default function Layout({ children }) {
+export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body>{children}</body>
