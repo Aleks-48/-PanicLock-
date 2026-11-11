@@ -914,3 +914,8 @@ footer span {
   overflow-wrap: anywhere;
   max-width: 65%;
 }
+
+.casequeue article{padding:12px 0;border-bottom:1px solid var(--line)}
+.casequeue small,.casequeue label,.casequeue p{display:block;font-size:12px;color:var(--muted);margin:6px 0}
+.casequeue input,.casequeue button{border:1px solid #40614d;border-radius:7px;padding:7px 10px;color:#d6f8e2;background:#203729}
+.casequeue input{display:block;width:100%;margin-top:5px}.casequeue button{font-size:12px}.casequeue button:disabled{opacity:.45;cursor:default}

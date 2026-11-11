@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { Activity, ArrowRight, Monitor, ShieldCheck } from "lucide-react";
+import Cases, { operatorHeaders } from "./cases";
 import { api, ApiError, type MonitorState } from "./client";
 
 export default function Observer({
@@ -20,7 +21,9 @@ export default function Observer({
     let timer: ReturnType<typeof setTimeout>;
     async function refresh() {
       try {
-        const snapshot = await api<MonitorState>("soc");
+        const snapshot = await api<MonitorState>("soc", {
+          headers: operatorHeaders(),
+        });
         if (active) {
           setData(snapshot);
           setError("");
@@ -91,7 +94,7 @@ export default function Observer({
                 ? money(last.amount) +
                   " held for 60 minutes. Mock alerts recorded for SOC and the trusted contact."
                 : last?.status === "RETURNED"
-                  ? "The hold expired. Funds returned to the sender."
+                  ? "Funds returned to the sender."
                   : last
                     ? "Funds credited to the demo recipient."
                     : "Waiting for a transfer from the device."}
@@ -116,6 +119,7 @@ export default function Observer({
             <span>Credited to recipients</span>
             <b>{money(data.credited)}</b>
           </div>
+          <Cases incidents={data.incidents} />
           <section className="guide">
             <h3>Bank event log</h3>
             <ol className="eventlog">
@@ -123,8 +127,8 @@ export default function Observer({
                 <li key={e.seq}>
                   <b>{e.kind}</b> · {money(e.amount)}
                   <small>
-                    {e.destination} ·{" "}
-                    {new Date(e.created * 1000).toLocaleTimeString()} ·{" "}
+                    {e.destination} · {e.actor || "System"} ·{" "}
+                    {new Date(e.created * 1000).toLocaleString()} ·{" "}
                     {e.id.slice(-8)}
                   </small>
                   {e.kind === "HOLD_DURESS" && e.expires && (

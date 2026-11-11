@@ -6,6 +6,8 @@ type Sql = {
 };
 type Env = { DB: { prepare(sql: string): Sql } };
 type Payment = Ticket & {
+  owner?: { hash: string; actor: string };
+  cancelled?: boolean;
   key: string;
   target: string;
   status: Audit["status"];
@@ -90,13 +92,23 @@ function expire(l: Ledger, now: number) {
     }
   }
 }
-function monitor(l: Ledger) {
+function monitor(l: Ledger, operator: string) {
   const byId = new Map(l.payments.map((p) => [p.id, p]));
   return {
     held: l.payments.reduce(
       (a, p) => a + (p.status === "HELD" ? p.amount : 0),
       0,
     ),
+    incidents: l.payments
+      .filter((p) => p.status === "HELD")
+      .slice()
+      .reverse()
+      .map((p) => ({
+        id: p.id,
+        amount: p.amount,
+        actor: p.owner?.actor || null,
+        mine: p.owner?.hash === operator,
+      })),
     credited: Object.values(l.credits).reduce((a, b) => a + b, 0),
     events: l.log
       .map((e, i) => {
@@ -108,6 +120,9 @@ function monitor(l: Ledger) {
           amount: p.amount,
           kind: e.kind,
           destination: e.destination,
+          actor: ["INCIDENT_CLAIMED", "CANCELLED_REFUNDED"].includes(e.kind)
+            ? p.owner?.actor
+            : "System",
           status: p.status,
           expires: p.expires,
         };
@@ -173,8 +188,60 @@ async function api(req: Request, env: Env, path: string) {
       .bind(id)
       .first<Row>();
   if (!row) return denied("Start a demo on the banking screen.", 401);
-  if (req.method === "GET" && path === "/api/soc")
-    return update(env, id, row, (l) => ({ value: monitor(l) }));
+  if (path === "/api/soc" || path.startsWith("/api/soc/incidents/")) {
+    const key = req.headers.get("x-operator") || "";
+    const operator = await hash(key);
+    if (req.method === "GET" && path === "/api/soc")
+      return update(env, id, row, (l) => ({ value: monitor(l, operator) }));
+    const ref = path.match(/^\/api\/soc\/incidents\/(PL-[A-F0-9]{32})$/)?.[1];
+    if (req.method !== "POST" || !ref) return denied("Unknown route", 404);
+    const input = (await req.json().catch(() => null)) as {
+      name: string;
+      action: string;
+    } | null;
+    if (
+      !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(key) ||
+      !input ||
+      !["claim", "cancel"].includes(input.action) ||
+      typeof input.name !== "string" ||
+      !input.name.trim() ||
+      input.name.length > 48 ||
+      /[\x00-\x1f\x7f]/.test(input.name)
+    )
+      return denied("Enter your operator name", 422);
+    return update(env, id, row, (l, now) => {
+      const p = l.payments.find((p) => p.id === ref);
+      const conflict = (detail: string) => ({ status: 409, value: { detail } });
+      if (!p) return { status: 404, value: { detail: "Unknown incident" } };
+      if (p.owner && p.owner.hash !== operator)
+        return conflict("Another operator owns this incident");
+      if (p.status !== "HELD") {
+        if (
+          input.action === "cancel" &&
+          p.cancelled &&
+          p.owner?.hash === operator
+        )
+          return { value: { ok: true } };
+        return conflict("This transfer is no longer held");
+      }
+      if (input.action === "claim") {
+        if (!p.owner) {
+          p.owner = {
+            hash: operator,
+            actor: input.name.trim() + " · " + operator.slice(0, 6),
+          };
+          log(l, p, "INCIDENT_CLAIMED", "SOC", now);
+        }
+      } else {
+        if (!p.owner) return conflict("Claim this incident first");
+        p.cancelled = true;
+        p.status = "RETURNED";
+        l.balance += p.amount;
+        log(l, p, "CANCELLED_REFUNDED", "Sender account", now);
+      }
+      return { value: { ok: true } };
+    });
+  }
   if (req.method === "GET" && path === "/api/account")
     return update(env, id, row, (l) => ({
       value: {
