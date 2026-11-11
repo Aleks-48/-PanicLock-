@@ -1,7 +1,6 @@
 "use client";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  Activity,
   ArrowDownLeft,
   ArrowLeft,
   ArrowRight,
@@ -9,21 +8,12 @@ import {
   Banknote,
   BatteryFull,
   Check,
-  CheckCheck,
-  ChevronRight,
-  CircleCheck,
-  ClipboardList,
   Coffee,
   Delete,
   Eye,
   EyeOff,
-  Fingerprint,
-  Headphones,
-  KeyRound,
-  Layers,
   LockKeyhole,
   Monitor,
-  Radio,
   RotateCcw,
   Shield,
   ShieldCheck,
@@ -35,22 +25,12 @@ import {
   Zap,
 } from "lucide-react";
 
-const format = (n) => new Intl.NumberFormat("en-US").format(n);
-const initial = { balance: 1250000, receipts: [], held: 0 };
-function ledger(state, action) {
-  if (action.type === "reset") return initial;
-  if (
-    action.type !== "transfer" ||
-    action.amount > state.balance ||
-    state.receipts.some((r) => r.id === action.id)
-  )
-    return state;
-  return {
-    balance: state.balance - action.amount,
-    held: state.held + (action.panic ? action.amount : 0),
-    receipts: [action, ...state.receipts],
-  };
-}
+import Observer from "./observer";
+import { api, ApiError, type Account, type Ticket } from "./client";
+type Screen =
+  "Home" | "Transfer" | "Activity" | "Security" | "Payments" | "Receipt";
+type Go = (screen: Screen) => void;
+const format = (n: number) => new Intl.NumberFormat("en-US").format(n);
 const history = [
   {
     name: "Magnum Supermarket",
@@ -85,7 +65,7 @@ function Brand() {
     </div>
   );
 }
-function Phone({ children }) {
+function Phone({ children }: { children: React.ReactNode }) {
   return (
     <div className="phone">
       <i className="sidekey" />
@@ -105,7 +85,7 @@ function Phone({ children }) {
     </div>
   );
 }
-function AppBar({ title, back }) {
+function AppBar({ title, back }: { title: string; back: () => void }) {
   return (
     <div className="appbar">
       <button aria-label="Go back" onClick={back}>
@@ -116,7 +96,13 @@ function AppBar({ title, back }) {
     </div>
   );
 }
-function Transactions({ receipts, all = false }) {
+function Transactions({
+  receipts,
+  all = false,
+}: {
+  receipts: Ticket[];
+  all?: boolean;
+}) {
   const rows = [
     ...receipts.map((r) => ({
       name: r.recipient,
@@ -149,7 +135,17 @@ function Transactions({ receipts, all = false }) {
     </div>
   );
 }
-function Home({ state, go, hidden, setHidden }) {
+function Home({
+  state,
+  go,
+  hidden,
+  setHidden,
+}: {
+  state: Account;
+  go: Go;
+  hidden: boolean;
+  setHidden: (v: boolean) => void;
+}) {
   return (
     <div className="home view">
       <div className="greeting">
@@ -181,11 +177,13 @@ function Home({ state, go, hidden, setHidden }) {
       </section>
       <h4>Quick actions</h4>
       <div className="actions">
-        {[
-          [ArrowUpRight, "Transfer"],
-          [Zap, "Payments"],
-          [ShieldCheck, "Security"],
-        ].map(([Icon, label]) => (
+        {(
+          [
+            [ArrowUpRight, "Transfer"],
+            [Zap, "Payments"],
+            [ShieldCheck, "Security"],
+          ] as const
+        ).map(([Icon, label]) => (
           <button onClick={() => go(label)} key={label}>
             <span>
               <Icon size={20} />
@@ -210,6 +208,14 @@ function Transfer({
   setAmount,
   confirm,
   back,
+}: {
+  balance: number;
+  recipient: string;
+  setRecipient: (v: string) => void;
+  amount: string;
+  setAmount: (v: string) => void;
+  confirm: () => void;
+  back: () => void;
 }) {
   const [error, setError] = useState("");
   return (
@@ -277,14 +283,22 @@ function Transfer({
     </div>
   );
 }
-function Pin({ close, submit }) {
+function Pin({
+  close,
+  submit,
+}: {
+  close: () => void;
+  submit: (pin: string) => Promise<void>;
+}) {
   const [pin, setPin] = useState(""),
     [err, setErr] = useState("");
-  const panel = useRef(null);
+  const panel = useRef<HTMLElement>(null);
+  const busy = useRef(false);
   useEffect(() => {
-    panel.current.focus();
+    panel.current?.focus();
   }, []);
-  function key(k) {
+  async function key(k: string) {
+    if (busy.current) return;
     if (k === "Backspace") {
       setPin(pin.slice(0, -1));
       return;
@@ -293,10 +307,17 @@ function Pin({ close, submit }) {
     let v = pin + k;
     setErr("");
     if (v.length < 4) setPin(v);
-    else if (v === "1111" || v === "9999") submit(v);
     else {
-      setPin("");
-      setErr("Incorrect PIN. Try again.");
+      busy.current = true;
+      setPin(v);
+      try {
+        await submit(v);
+      } catch (e) {
+        setPin("");
+        setErr(e instanceof Error ? e.message : "Try again");
+      } finally {
+        busy.current = false;
+      }
     }
   }
   return (
@@ -309,15 +330,16 @@ function Pin({ close, submit }) {
         tabIndex={-1}
         ref={panel}
         onKeyDown={(e) => {
-          if (e.key === "Escape") close();
+          if (e.key === "Escape" && !busy.current) close();
           else if (e.key === "Tab") {
-            const buttons = [...panel.current.querySelectorAll("button")];
+            const buttons = [...panel.current!.querySelectorAll("button")];
             if (
               e.shiftKey &&
-              [panel.current, buttons[0]].includes(document.activeElement)
+              (document.activeElement === panel.current ||
+                document.activeElement === buttons[0])
             ) {
               e.preventDefault();
-              buttons.at(-1).focus();
+              buttons.at(-1)?.focus();
             } else if (
               !e.shiftKey &&
               document.activeElement === buttons.at(-1)
@@ -331,7 +353,13 @@ function Pin({ close, submit }) {
           }
         }}
       >
-        <button className="dismiss" onClick={close} aria-label="Close keypad">
+        <button
+          className="dismiss"
+          onClick={() => {
+            if (!busy.current) close();
+          }}
+          aria-label="Close keypad"
+        >
           <X size={19} />
         </button>
         <LockKeyhole className="pinlock" />
@@ -371,7 +399,15 @@ function Pin({ close, submit }) {
     </div>
   );
 }
-function Receipt({ receipt, balance, home }) {
+function Receipt({
+  receipt,
+  balance,
+  home,
+}: {
+  receipt: Ticket;
+  balance: number;
+  home: () => void;
+}) {
   return (
     <div className="view inner receipt">
       <span className="success">
@@ -397,101 +433,84 @@ function Receipt({ receipt, balance, home }) {
     </div>
   );
 }
-function Observer({ open, toggle, state }) {
-  const last = state.receipts[0];
-  return (
-    <aside>
-      <div className="panelheading">
-        <span className="sectionicon">
-          <Activity size={19} />
-        </span>
-        <h2>Security operations</h2>
-        <span className="tag">SOC</span>
-      </div>
-      <div className="monitorbox">
-        <div className="monitorhead">
-          <span className="led" />
-          <span>LIVE MONITOR</span>
-          <Activity size={16} />
-        </div>
-        <div className="radar">
-          <div className="cross" />
-          <div className="sweep" />
-          <i className="blip" />
-          <i className="blip second" />
-          <span>
-            <ShieldCheck size={29} />
-          </span>
-        </div>
-        <h3>
-          {!open
-            ? "Observer standby"
-            : last?.panic
-              ? "Duress PIN detected"
-              : last
-                ? "Transfer authorized"
-                : "Monitoring active"}
-        </h3>
-        <p aria-live="polite">
-          {!open
-            ? "Open the SOC view to inspect bank-side events."
-            : last?.panic
-              ? "🚨 DURESS PIN DETECTED: " +
-                format(last.amount) +
-                " KZT held in quarantine. Funds safe. Police/SOC notified. Attacker deceived."
-              : last
-                ? "Standard PIN verified. Transfer released."
-                : "Waiting for a transfer from the device."}
-        </p>
-        <button onClick={toggle}>
-          <Monitor size={15} />
-          {open ? "Close SOC view" : "Open SOC view"}
-          <ArrowRight size={15} />
-        </button>
-      </div>
-      {open && (
-        <div className="telemetry">
-          <span>Simulated quarantine</span>
-          <b>{format(state.held)} ₸</b>
-        </div>
-      )}
-      <div className="guide">
-        <div className="panelheading">
-          <KeyRound size={17} />
-          <h3>Demo credentials</h3>
-        </div>
-        {[
-          ["Standard PIN", "1111", KeyRound],
-          ["Duress PIN", "9999", Fingerprint],
-        ].map(([label, num, Icon]) => (
-          <div className="cred" key={num}>
-            <Icon size={16} />
-            <span>{label}</span>
-            <code>{num}</code>
-          </div>
-        ))}
-      </div>
-    </aside>
-  );
-}
 export default function Page() {
-  const [state, dispatch] = useReducer(ledger, initial),
-    [screen, go] = useState("Home"),
+  const [state, setState] = useState<Account | null>(null),
+    [screen, go] = useState<Screen>("Home"),
     [open, setOpen] = useState(false),
     [pin, setPin] = useState(false),
     [hidden, setHidden] = useState(false),
     [amount, setAmount] = useState("500000"),
     [recipient, setRecipient] = useState("+7 701 555 0142");
-  function reset() {
-    dispatch({ type: "reset" });
-    go("Home");
-    setOpen(false);
-    setPin(false);
-    setHidden(false);
-    setAmount("500000");
-    setRecipient("+7 701 555 0142");
+  const [notice, setNotice] = useState("");
+  const [ticket, setTicket] = useState<Ticket | null>(null);
+  const attempt = useRef<{ payload: string; key: string } | null>(null);
+  const working = useRef(false);
+  async function load(fresh = false) {
+    if (working.current) return;
+    working.current = true;
+    try {
+      let result: Account;
+      if (fresh) result = await api<Account>("session", { method: "POST" });
+      else
+        try {
+          result = await api<Account>("account");
+        } catch (e) {
+          if (!(e instanceof ApiError) || e.status !== 401) throw e;
+          result = await api<Account>("session", { method: "POST" });
+        }
+      setState(result);
+      setNotice("");
+      if (fresh) {
+        go("Home");
+        setPin(false);
+        setHidden(false);
+        setTicket(null);
+        attempt.current = null;
+        setAmount("500000");
+        setRecipient("+7 701 555 0142");
+      }
+    } catch {
+      setNotice("Bank unavailable. Retry connection.");
+    } finally {
+      working.current = false;
+    }
   }
-  const home = () => go("Home");
+  useEffect(() => {
+    void load();
+  }, []);
+  async function submit(pinValue: string) {
+    if (working.current) throw new Error("Please wait.");
+    working.current = true;
+    try {
+      const payload = JSON.stringify([recipient, amount]);
+      if (attempt.current?.payload !== payload)
+        attempt.current = { payload, key: crypto.randomUUID() };
+      const result = await api<Ticket>("transfers", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": attempt.current.key,
+        },
+        body: JSON.stringify({
+          recipient,
+          amount: Number(amount),
+          pin: pinValue,
+        }),
+      });
+      const updated = await api<Account>("account");
+      setState(updated);
+      setTicket(result);
+      setPin(false);
+      go("Receipt");
+      attempt.current = null;
+    } finally {
+      working.current = false;
+    }
+  }
+  const home = () => {
+    go("Home");
+    void load();
+  };
   return (
     <>
       <header>
@@ -524,20 +543,28 @@ export default function Page() {
             protection.
           </p>
         </div>
+        {notice && state && <p role="alert">{notice}</p>}
         <div className="workspace">
           <section className="devicepane">
             <div className="devicehead">
               <span>
                 <Smartphone size={15} /> Customer device
               </span>
-              <button onClick={reset}>
+              <button onClick={() => void load(true)} disabled={pin}>
                 <RotateCcw size={13} /> Reset demo
               </button>
             </div>
             <div className="stage">
               <Phone>
                 <div inert={pin ? true : undefined} className="screenarea">
-                  {screen === "Home" ? (
+                  {!state ? (
+                    <div className="inner">
+                      <p>{notice || "Connecting to the bank…"}</p>
+                      {notice && (
+                        <button onClick={() => void load()}>Retry</button>
+                      )}
+                    </div>
+                  ) : screen === "Home" ? (
                     <Home {...{ state, go, hidden, setHidden }} />
                   ) : screen === "Transfer" ? (
                     <Transfer
@@ -546,9 +573,9 @@ export default function Page() {
                       confirm={() => setPin(true)}
                       back={home}
                     />
-                  ) : screen === "Receipt" ? (
+                  ) : screen === "Receipt" && ticket ? (
                     <Receipt
-                      receipt={state.receipts[0]}
+                      receipt={ticket}
                       balance={state.balance}
                       home={home}
                     />
@@ -583,27 +610,11 @@ export default function Page() {
                     </div>
                   )}
                 </div>
-                {pin && (
-                  <Pin
-                    close={() => setPin(false)}
-                    submit={(v) => {
-                      dispatch({
-                        type: "transfer",
-                        amount: +amount,
-                        recipient,
-                        id:
-                          "PL-" + crypto.randomUUID().slice(0, 8).toUpperCase(),
-                        panic: v === "9999",
-                      });
-                      setPin(false);
-                      go("Receipt");
-                    }}
-                  />
-                )}
+                {pin && <Pin close={() => setPin(false)} submit={submit} />}
               </Phone>
             </div>
           </section>
-          <Observer open={open} toggle={() => setOpen(!open)} state={state} />
+          <Observer open={open} toggle={() => setOpen(!open)} />
         </div>
         <footer>
           <LockKeyhole size={12} /> Isolated demo environment{" "}

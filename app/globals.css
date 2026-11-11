@@ -877,3 +877,40 @@ footer span {
     transition: none !important;
   }
 }
+.operator {
+  max-width: 620px;
+  padding: 2rem 0;
+}
+.monitorbox input {
+  display: block;
+  background: #12231a;
+  border: 1px solid #587760;
+  border-radius: 6px;
+  padding: 8px;
+  margin: 6px auto;
+  color: white;
+}
+.monitorbox form {
+  margin: 12px;
+}
+.eventlog {
+  max-height: 260px;
+  overflow: auto;
+}
+.eventlog li {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 0;
+  font-size: 12px;
+}
+.eventlog small {
+  display: block;
+  color: var(--muted);
+}
+.guide a {
+  font-size: 13px;
+  color: var(--green);
+}
+.receipt dd {
+  overflow-wrap: anywhere;
+  max-width: 65%;
+}
